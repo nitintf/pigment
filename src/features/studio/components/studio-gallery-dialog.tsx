@@ -1,4 +1,5 @@
-import { Clock, Home, Plus, Search } from "lucide-react";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { Clock, Home, Import, Plus, Search } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useTabStore } from "../store/tab-store";
@@ -113,6 +114,19 @@ export function StudioGalleryDialog({ open, onOpenChange }: StudioGalleryDialogP
     void closeTab(id).then(loadCanvases);
   }
 
+  function handleImportEasel() {
+    void openFileDialog({
+      multiple: false,
+      filters: [{ name: "Easel", extensions: ["easel"] }],
+    }).then((selected: string | null) => {
+      if (!selected) return;
+      void canvasApi.importEaselFile(selected).then((meta) => {
+        setActiveTab(meta.id);
+        onOpenChange(false);
+      });
+    });
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -124,7 +138,7 @@ export function StudioGalleryDialog({ open, onOpenChange }: StudioGalleryDialogP
         {/* Left sidebar */}
         <div className="flex w-[200px] flex-shrink-0 flex-col border-r border-[#2a2a2a] bg-[#181818]">
           <div className="px-4 pt-5 pb-3">
-            <h2 className="text-[13px] font-semibold text-[#e0e0e0]">Pigment</h2>
+            <h2 className="text-[13px] font-semibold text-[#e0e0e0]">Easel</h2>
           </div>
           <nav className="flex flex-col gap-0.5 px-2">
             <button
@@ -140,13 +154,20 @@ export function StudioGalleryDialog({ open, onOpenChange }: StudioGalleryDialogP
             </button>
           </nav>
           <div className="flex-1" />
-          <div className="border-t border-[#2a2a2a] px-4 py-3">
+          <div className="flex flex-col gap-1.5 border-t border-[#2a2a2a] px-4 py-3">
             <button
               className="flex w-full items-center justify-center gap-2 rounded-md bg-[#4f8ef7]/15 py-1.5 text-[11px] text-[#8ab4f8] transition-colors hover:bg-[#4f8ef7]/25"
               onClick={handleNewCanvas}
             >
               <Plus className="size-3.5" />
               New Canvas
+            </button>
+            <button
+              className="flex w-full items-center justify-center gap-2 rounded-md py-1.5 text-[11px] text-[#888] transition-colors hover:bg-[#222] hover:text-[#ccc]"
+              onClick={handleImportEasel}
+            >
+              <Import className="size-3.5" />
+              Import .easel
             </button>
           </div>
         </div>

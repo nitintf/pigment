@@ -1,12 +1,12 @@
 [package]
-name = "pigment"
+name = "easel"
 version = "0.1.0"
-description = "Pigment — AI-powered collaborative design canvas"
+description = "Easel — AI-powered collaborative design canvas"
 authors = ["you"]
 edition = "2021"
 
 [lib]
-name = "pigment_lib"
+name = "easel_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -20,3 +20,5 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1" }
+tauri-plugin-dialog = "2.6.0"

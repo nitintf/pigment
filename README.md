@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="public/icon.png" alt="Pigment" width="100" height="100"/>
+  <img src="public/icon.png" alt="Easel" width="100" height="100"/>
 </p>
 
-<h1 align="center">Pigment</h1>
+<h1 align="center">Easel</h1>
 
 <p align="center">
   AI-native design studio. Design on a canvas with multiple AI agents working alongside you.
@@ -17,12 +17,12 @@
 
 ---
 
-## What is Pigment?
+## What is Easel?
 
-Pigment is an open-source design studio powered by multiple AI agents. It combines a full-featured vector canvas with an AI-driven workflow where parallel agents can generate, iterate, and refine designs with you in real time. Built as a native desktop app with Tauri for speed and privacy.
+Easel is an open-source design studio powered by multiple AI agents. It combines a full-featured vector canvas with an AI-driven workflow where parallel agents can generate, iterate, and refine designs with you in real time. Built as a native desktop app with Tauri for speed and privacy.
 
 <p align="center">
-  <img src="docs/main-screen.png" alt="Pigment" width="720" />
+  <img src="docs/main-screen.png" alt="Easel" width="720" />
 </p>
 
 ## Tech Stack

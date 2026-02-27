@@ -36,6 +36,10 @@ export function getCanvasState(canvasId: string): Promise<CanvasState | null> {
   return invoke<CanvasState | null>("get_canvas_state", { canvasId });
 }
 
+export function importEaselFile(filePath: string): Promise<CanvasMeta> {
+  return invoke<CanvasMeta>("import_easel_file", { filePath });
+}
+
 export function saveCanvasState(
   canvasId: string,
   canvasJson: string,

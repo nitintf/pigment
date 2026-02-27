@@ -11,6 +11,7 @@ pub struct CanvasMeta {
     pub updated_at: String,
 }
 
+/// Return type for get_canvas_state command (populated from .easel file, not DB)
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CanvasState {
@@ -45,12 +46,6 @@ pub fn create_canvas(conn: &Connection, id: &str, name: &str, sort_order: i32) -
         params![id, name, sort_order],
     )?;
 
-    // Also create an empty canvas state row
-    conn.execute(
-        "INSERT INTO canvas_states (canvas_id) VALUES (?1)",
-        params![id],
-    )?;
-
     conn.query_row(
         "SELECT id, name, sort_order, created_at, updated_at FROM canvases WHERE id = ?1",
         params![id],
@@ -79,50 +74,47 @@ pub fn delete_canvas(conn: &Connection, id: &str) -> Result<(), rusqlite::Error>
     Ok(())
 }
 
-pub fn get_canvas_state(conn: &Connection, canvas_id: &str) -> Result<Option<CanvasState>, rusqlite::Error> {
-    let mut stmt = conn.prepare(
-        "SELECT canvas_id, canvas_json, zoom, viewport_transform, updated_at FROM canvas_states WHERE canvas_id = ?1"
-    )?;
+pub fn canvas_exists(conn: &Connection, id: &str) -> Result<bool, rusqlite::Error> {
+    conn.query_row(
+        "SELECT COUNT(*) > 0 FROM canvases WHERE id = ?1",
+        params![id],
+        |row| row.get(0),
+    )
+}
 
-    let result = stmt.query_row(params![canvas_id], |row| {
-        Ok(CanvasState {
-            canvas_id: row.get(0)?,
-            canvas_json: row.get(1)?,
-            zoom: row.get(2)?,
-            viewport_transform: row.get(3)?,
-            updated_at: row.get(4)?,
-        })
-    });
+pub fn create_canvas_with_timestamps(
+    conn: &Connection,
+    id: &str,
+    name: &str,
+    sort_order: i32,
+    created_at: &str,
+    updated_at: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO canvases (id, name, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![id, name, sort_order, created_at, updated_at],
+    )?;
+    Ok(())
+}
+
+pub fn get_canvas_name(conn: &Connection, id: &str) -> Result<Option<String>, rusqlite::Error> {
+    let result = conn.query_row(
+        "SELECT name FROM canvases WHERE id = ?1",
+        params![id],
+        |row| row.get(0),
+    );
 
     match result {
-        Ok(state) => Ok(Some(state)),
+        Ok(name) => Ok(Some(name)),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e),
     }
 }
 
-pub fn save_canvas_state(
-    conn: &Connection,
-    canvas_id: &str,
-    canvas_json: &str,
-    zoom: f64,
-    viewport_transform: &str,
-) -> Result<(), rusqlite::Error> {
-    conn.execute(
-        "INSERT INTO canvas_states (canvas_id, canvas_json, zoom, viewport_transform, updated_at)
-         VALUES (?1, ?2, ?3, ?4, datetime('now'))
-         ON CONFLICT(canvas_id) DO UPDATE SET
-            canvas_json = excluded.canvas_json,
-            zoom = excluded.zoom,
-            viewport_transform = excluded.viewport_transform,
-            updated_at = excluded.updated_at",
-        params![canvas_id, canvas_json, zoom, viewport_transform],
-    )?;
-
+pub fn update_canvas_timestamp(conn: &Connection, id: &str) -> Result<(), rusqlite::Error> {
     conn.execute(
         "UPDATE canvases SET updated_at = datetime('now') WHERE id = ?1",
-        params![canvas_id],
+        params![id],
     )?;
-
     Ok(())
 }

@@ -2,6 +2,7 @@ use rusqlite::Connection;
 
 const MIGRATIONS: &[(&str, &str)] = &[
     ("001", include_str!("001_initial.sql")),
+    ("002", include_str!("002_drop_canvas_states.sql")),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {

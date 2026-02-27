@@ -2,11 +2,57 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::db;
+use crate::easel;
 use crate::state::AppState;
 
 #[tauri::command]
 pub fn list_canvases(state: State<'_, AppState>) -> Result<Vec<db::canvas::CanvasMeta>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    // Reconcile: scan canvases directory for .easel files not yet in DB
+    let canvases_dir = easel::canvases_dir(&state.app_data_dir);
+    if canvases_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&canvases_dir) {
+            let count: i32 = conn
+                .query_row("SELECT COUNT(*) FROM canvases", [], |row| row.get(0))
+                .unwrap_or(0);
+            let mut offset = 0;
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("easel") {
+                    continue;
+                }
+                let id = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                if id.is_empty() {
+                    continue;
+                }
+
+                let exists = db::canvas::canvas_exists(&conn, &id).unwrap_or(true);
+                if exists {
+                    continue;
+                }
+
+                // Read the .easel file to get metadata
+                if let Ok(easel_file) = easel::EaselFile::load(&path) {
+                    let _ = db::canvas::create_canvas_with_timestamps(
+                        &conn,
+                        &id,
+                        &easel_file.name,
+                        count + offset,
+                        &easel_file.created_at,
+                        &easel_file.updated_at,
+                    );
+                    offset += 1;
+                }
+            }
+        }
+    }
+
     db::canvas::list_canvases(&conn).map_err(|e| e.to_string())
 }
 
@@ -19,25 +65,92 @@ pub fn create_canvas(state: State<'_, AppState>, name: String) -> Result<db::can
         .query_row("SELECT COUNT(*) FROM canvases", [], |row| row.get(0))
         .map_err(|e| e.to_string())?;
 
-    db::canvas::create_canvas(&conn, &id, &name, count).map_err(|e| e.to_string())
+    let meta = db::canvas::create_canvas(&conn, &id, &name, count).map_err(|e| e.to_string())?;
+
+    // Create an empty .easel file
+    let easel = easel::EaselFile::new(&name);
+    let path = easel::canvas_easel_path(&state.app_data_dir, &id);
+    easel.save(&path)?;
+
+    Ok(meta)
 }
 
 #[tauri::command]
 pub fn rename_canvas(state: State<'_, AppState>, id: String, name: String) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    db::canvas::rename_canvas(&conn, &id, &name).map_err(|e| e.to_string())
+    db::canvas::rename_canvas(&conn, &id, &name).map_err(|e| e.to_string())?;
+
+    // Also update the name in the .easel file
+    let path = easel::canvas_easel_path(&state.app_data_dir, &id);
+    if path.exists() {
+        let mut easel_file = easel::EaselFile::load(&path)?;
+        easel_file.name = name;
+        easel_file.save(&path)?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
 pub fn delete_canvas(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    db::canvas::delete_canvas(&conn, &id).map_err(|e| e.to_string())
+    db::canvas::delete_canvas(&conn, &id).map_err(|e| e.to_string())?;
+
+    // Also delete the .easel file
+    let path = easel::canvas_easel_path(&state.app_data_dir, &id);
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn import_easel_file(state: State<'_, AppState>, file_path: String) -> Result<db::canvas::CanvasMeta, String> {
+    let source = std::path::PathBuf::from(&file_path);
+    if !source.exists() {
+        return Err(format!("File not found: {}", file_path));
+    }
+
+    let easel_file = easel::EaselFile::load(&source)?;
+
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let id = Uuid::new_v4().to_string();
+    let count: i32 = conn
+        .query_row("SELECT COUNT(*) FROM canvases", [], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+
+    let meta = db::canvas::create_canvas(&conn, &id, &easel_file.name, count)
+        .map_err(|e| e.to_string())?;
+
+    // Copy the .easel file to the canvases directory
+    let dest = easel::canvas_easel_path(&state.app_data_dir, &id);
+    easel_file.save(&dest)?;
+
+    Ok(meta)
 }
 
 #[tauri::command]
 pub fn get_canvas_state(state: State<'_, AppState>, canvas_id: String) -> Result<Option<db::canvas::CanvasState>, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    db::canvas::get_canvas_state(&conn, &canvas_id).map_err(|e| e.to_string())
+    let path = easel::canvas_easel_path(&state.app_data_dir, &canvas_id);
+
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let easel_file = easel::EaselFile::load(&path)?;
+    let canvas_json = serde_json::to_string(&easel_file.canvas)
+        .map_err(|e| e.to_string())?;
+    let viewport_transform = serde_json::to_string(&easel_file.viewport.transform)
+        .map_err(|e| e.to_string())?;
+
+    Ok(Some(db::canvas::CanvasState {
+        canvas_id,
+        canvas_json,
+        zoom: easel_file.viewport.zoom,
+        viewport_transform,
+        updated_at: easel_file.updated_at,
+    }))
 }
 
 #[tauri::command]
@@ -48,7 +161,33 @@ pub fn save_canvas_state(
     zoom: f64,
     viewport_transform: String,
 ) -> Result<(), String> {
+    let path = easel::canvas_easel_path(&state.app_data_dir, &canvas_id);
+
+    let canvas: serde_json::Value = serde_json::from_str(&canvas_json)
+        .map_err(|e| format!("Invalid canvas JSON: {}", e))?;
+    let transform: Vec<f64> = serde_json::from_str(&viewport_transform)
+        .map_err(|e| format!("Invalid viewport transform: {}", e))?;
+
+    // Load existing file or create new
+    let mut easel_file = if path.exists() {
+        easel::EaselFile::load(&path)?
+    } else {
+        // Get canvas name from DB
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let name = db::canvas::get_canvas_name(&conn, &canvas_id)
+            .map_err(|e| e.to_string())?
+            .unwrap_or_else(|| "Untitled".to_string());
+        easel::EaselFile::new(&name)
+    };
+
+    easel_file.canvas = canvas;
+    easel_file.viewport.zoom = zoom;
+    easel_file.viewport.transform = transform;
+    easel_file.save(&path)?;
+
+    // Update timestamp in canvases table
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    db::canvas::save_canvas_state(&conn, &canvas_id, &canvas_json, zoom, &viewport_transform)
-        .map_err(|e| e.to_string())
+    db::canvas::update_canvas_timestamp(&conn, &canvas_id).map_err(|e| e.to_string())?;
+
+    Ok(())
 }

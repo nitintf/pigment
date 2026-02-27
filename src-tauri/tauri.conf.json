@@ -1,8 +1,8 @@
 {
-  "$schema": "https://raw.githubusercontent.com/nicoh-dev/tauri-v2-schema/main/tauri.schema.json",
+  "$schema": "https://schema.tauri.app/config/2",
   "productName": "Pigment",
   "version": "0.1.0",
-  "identifier": "app.pigment",
+  "identifier": "com.nitintf.pigment",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",

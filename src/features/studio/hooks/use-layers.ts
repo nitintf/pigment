@@ -4,6 +4,7 @@ import { getFabricCanvas, useStudioStore } from "../store/studio-store";
 import { setParentId } from "../utils/frame-helpers";
 
 import type { LayerTreeNode, StudioObject } from "../types";
+import type { FabricObject as FabricObjectType } from "fabric";
 
 interface CustomObj {
   id?: string;
@@ -102,6 +103,42 @@ export function useLayers() {
     [syncObjects],
   );
 
+  const duplicateObject = useCallback(
+    (id: string) => {
+      const canvas = getFabricCanvas();
+      const obj = getObjectById(id);
+      if (!canvas || !obj) return;
+
+      void obj
+        .clone(["id", "name", "isFrame", "isComponent", "parentId"])
+        .then((cloned: FabricObjectType) => {
+          cloned.set({ left: (cloned.left ?? 0) + 20, top: (cloned.top ?? 0) + 20 });
+          const newId = `obj-dup-${String(Date.now())}`;
+          (cloned as unknown as { id: string }).id = newId;
+          const origName = (cloned as unknown as { name?: string }).name ?? "Object";
+          (cloned as unknown as { name: string }).name = `${origName} copy`;
+          canvas.add(cloned);
+          canvas.setActiveObject(cloned);
+          canvas.requestRenderAll();
+          syncObjects();
+        });
+    },
+    [syncObjects],
+  );
+
+  const renameObject = useCallback(
+    (id: string, name: string) => {
+      const canvas = getFabricCanvas();
+      const obj = getObjectById(id);
+      if (!canvas || !obj) return;
+
+      (obj as unknown as { name: string }).name = name;
+      updateObject(id, { name });
+      canvas.requestRenderAll();
+    },
+    [updateObject],
+  );
+
   const reparentObject = useCallback(
     (sourceId: string, targetId: string, position: "above" | "inside" | "below") => {
       const canvas = getFabricCanvas();
@@ -174,6 +211,8 @@ export function useLayers() {
     toggleVisibility,
     selectObject,
     deleteObject,
+    duplicateObject,
+    renameObject,
     reparentObject,
   };
 }

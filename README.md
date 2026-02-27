@@ -1,30 +1,33 @@
-# Pigment
+<p align="center">
+  <img src="public/icon.png" alt="Pigment" width="100" height="100"/>
+</p>
 
-An AI-native design studio. Design on a canvas with multiple AI agents working alongside you — like Figma meets a team of AI designers, running natively on your desktop.
+<h1 align="center">Pigment</h1>
 
-![Pigment — AI-native design studio](docs/main-screen.png)
+<p align="center">
+  AI-native design studio. Design on a canvas with multiple AI agents working alongside you.
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> &middot;
+  <a href="#getting-started">Getting Started</a> &middot;
+  <a href="#roadmap">Roadmap</a> &middot;
+  <a href="#license">License</a>
+</p>
+
+---
 
 ## What is Pigment?
 
-Pigment is an open-source design studio powered by multiple AI agents. It combines a full-featured vector canvas with an AI-driven workflow where parallel agents can generate, iterate, and refine designs with you in real time. Built as a native desktop app for speed and privacy.
+Pigment is an open-source design studio powered by multiple AI agents. It combines a full-featured vector canvas with an AI-driven workflow where parallel agents can generate, iterate, and refine designs with you in real time. Built as a native desktop app with Tauri for speed and privacy.
 
-## Why Pigment?
-
-- **AI-first design** — Multiple AI agents work in parallel to help you design faster
-- **Native performance** — Built with Tauri, runs locally on your machine
-- **Studio workflow** — A professional canvas with layers, components, frames, and export — not a toy
-- **Open source** — Extend it, self-host it, make it yours
+<p align="center">
+  <img src="docs/main-screen.png" alt="Pigment" width="720" />
+</p>
 
 ## Tech Stack
 
-- **Tauri v2** — Native desktop shell (Rust backend)
-- **React 19** — UI framework
-- **Fabric.js v7** — Canvas rendering and object manipulation
-- **Zustand v5** — State management
-- **Tailwind v4** — Styling
-- **shadcn/ui + Radix UI** — UI components
-- **Motion** — Animations
-- **cmdk** — Command palette
+Tauri v2 &middot; React 19 &middot; Fabric.js v7 &middot; Zustand v5 &middot; Tailwind v4 &middot; shadcn/ui &middot; Motion &middot; cmdk
 
 ## Features
 

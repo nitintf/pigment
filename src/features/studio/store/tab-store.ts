@@ -1,84 +1,145 @@
 import { create } from "zustand";
 
-export interface TabCanvasState {
-  canvasJson: string;
-  zoom: number;
-  viewportTransform: number[];
-}
+import type { CanvasMeta } from "@/lib/api/canvas";
+
+import * as canvasApi from "@/lib/api/canvas";
+import { setPreference } from "@/lib/api/preferences";
 
 export interface Tab {
   id: string;
   name: string;
-  edited: boolean;
-  canvasState?: TabCanvasState;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function toTab(meta: CanvasMeta): Tab {
+  return {
+    id: meta.id,
+    name: meta.name,
+    sortOrder: meta.sortOrder,
+    createdAt: meta.createdAt,
+    updatedAt: meta.updatedAt,
+  };
 }
 
 interface TabState {
   tabs: Tab[];
   activeTabId: string;
+  initialized: boolean;
   actions: {
-    addTab: () => void;
-    closeTab: (id: string) => void;
+    initialize: (lastActiveId?: string) => Promise<void>;
+    addTab: () => Promise<void>;
+    closeTab: (id: string) => Promise<void>;
+    duplicateTab: (id: string) => Promise<void>;
     setActiveTab: (id: string) => void;
-    renameTab: (id: string, name: string) => void;
-    markEdited: (id: string) => void;
-    saveTabCanvasState: (id: string, state: TabCanvasState) => void;
+    renameTab: (id: string, name: string) => Promise<void>;
   };
 }
 
-let tabCounter = 1;
+let tabNameCounter = 1;
 
-function createTab(): Tab {
-  const id = `tab-${String(tabCounter)}-${String(Date.now())}`;
-  const name = `Untitled ${String(tabCounter)}`;
-  tabCounter += 1;
-  return { id, name, edited: false };
-}
-
-const initialTab = createTab();
-
-export const useTabStore = create<TabState>()((set) => ({
-  tabs: [initialTab],
-  activeTabId: initialTab.id,
+export const useTabStore = create<TabState>()((set, get) => ({
+  tabs: [],
+  activeTabId: "",
+  initialized: false,
   actions: {
-    addTab: () => {
-      const tab = createTab();
-      set((state) => ({
-        tabs: [...state.tabs, tab],
+    initialize: async (lastActiveId?: string) => {
+      if (get().initialized) return;
+      const canvases = await canvasApi.listCanvases();
+
+      if (canvases.length === 0) {
+        const canvas = await canvasApi.createCanvas("Untitled 1");
+        tabNameCounter = 2;
+        set({ tabs: [toTab(canvas)], activeTabId: canvas.id, initialized: true });
+        return;
+      }
+
+      const tabs = canvases.map(toTab);
+
+      // Find highest "Untitled N" number for counter continuity
+      for (const tab of tabs) {
+        const match = /^Untitled (\d+)$/.exec(tab.name);
+        if (match) {
+          tabNameCounter = Math.max(tabNameCounter, Number(match[1]) + 1);
+        }
+      }
+
+      const activeId =
+        lastActiveId && tabs.some((t) => t.id === lastActiveId) ? lastActiveId : tabs[0].id;
+
+      set({ tabs, activeTabId: activeId, initialized: true });
+    },
+
+    addTab: async () => {
+      const name = `Untitled ${String(tabNameCounter)}`;
+      tabNameCounter += 1;
+      const canvas = await canvasApi.createCanvas(name);
+      const tab = toTab(canvas);
+      set((s) => ({
+        tabs: [...s.tabs, tab],
         activeTabId: tab.id,
       }));
+      void setPreference("lastActiveCanvasId", tab.id);
     },
-    closeTab: (id: string) => {
-      set((state) => {
-        const remaining = state.tabs.filter((t) => t.id !== id);
-        if (remaining.length === 0) {
-          // Always keep at least one tab
-          const newTab = createTab();
-          return { tabs: [newTab], activeTabId: newTab.id };
-        }
-        const needsNewActive = state.activeTabId === id;
-        return {
-          tabs: remaining,
-          activeTabId: needsNewActive ? remaining[remaining.length - 1].id : state.activeTabId,
-        };
-      });
+
+    closeTab: async (id: string) => {
+      const { tabs, activeTabId } = get();
+      await canvasApi.deleteCanvas(id);
+
+      const remaining = tabs.filter((t) => t.id !== id);
+
+      if (remaining.length === 0) {
+        const name = `Untitled ${String(tabNameCounter)}`;
+        tabNameCounter += 1;
+        const canvas = await canvasApi.createCanvas(name);
+        const newTab = toTab(canvas);
+        set({ tabs: [newTab], activeTabId: newTab.id });
+        void setPreference("lastActiveCanvasId", newTab.id);
+        return;
+      }
+
+      const needsNewActive = activeTabId === id;
+      const newActiveId = needsNewActive ? remaining[remaining.length - 1].id : activeTabId;
+
+      set({ tabs: remaining, activeTabId: newActiveId });
+      void setPreference("lastActiveCanvasId", newActiveId);
     },
+
+    duplicateTab: async (id: string) => {
+      const { tabs } = get();
+      const source = tabs.find((t) => t.id === id);
+      if (!source) return;
+
+      const newName = `${source.name} copy`;
+      const canvas = await canvasApi.createCanvas(newName);
+      const sourceState = await canvasApi.getCanvasState(id);
+      if (sourceState) {
+        await canvasApi.saveCanvasState(
+          canvas.id,
+          sourceState.canvasJson,
+          sourceState.zoom,
+          sourceState.viewportTransform,
+        );
+      }
+
+      const tab = toTab(canvas);
+      set((s) => ({
+        tabs: [...s.tabs, tab],
+        activeTabId: tab.id,
+      }));
+      void setPreference("lastActiveCanvasId", tab.id);
+    },
+
     setActiveTab: (id: string) => {
       set({ activeTabId: id });
+      void setPreference("lastActiveCanvasId", id);
     },
-    renameTab: (id: string, name: string) => {
-      set((state) => ({
-        tabs: state.tabs.map((t) => (t.id === id ? { ...t, name } : t)),
-      }));
-    },
-    markEdited: (id: string) => {
-      set((state) => ({
-        tabs: state.tabs.map((t) => (t.id === id ? { ...t, edited: true } : t)),
-      }));
-    },
-    saveTabCanvasState: (id: string, state: TabCanvasState) => {
+
+    renameTab: async (id: string, name: string) => {
+      await canvasApi.renameCanvas(id, name);
       set((s) => ({
-        tabs: s.tabs.map((t) => (t.id === id ? { ...t, canvasState: state } : t)),
+        tabs: s.tabs.map((t) => (t.id === id ? { ...t, name } : t)),
       }));
     },
   },

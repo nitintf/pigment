@@ -20,6 +20,7 @@ export type AiModel = "claude-sonnet" | "claude-opus" | "claude-haiku";
 export interface TabChatSession {
   messages: ChatMessage[];
   agents: AgentRun[];
+  sessionId?: string;
 }
 
 export interface ChatState {
@@ -37,8 +38,10 @@ export interface ChatActions {
   setModel: (model: AiModel) => void;
   setParallelAgents: (count: number) => void;
   setInputValue: (value: string) => void;
-  sendMessage: (content: string, tabId: string, attachments?: File[]) => void;
-  clearMessages: (tabId: string) => void;
+  initializePreferences: () => Promise<void>;
+  loadSessionForTab: (tabId: string) => Promise<void>;
+  sendMessage: (content: string, tabId: string, attachments?: File[]) => Promise<void>;
+  clearMessages: (tabId: string) => Promise<void>;
 }
 
 export const AI_MODELS: { id: AiModel; label: string; description: string }[] = [

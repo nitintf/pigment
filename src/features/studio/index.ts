@@ -10,5 +10,6 @@ export { StudioLayerItem } from "./components/studio-layer-item";
 export { StudioPropertiesPanel } from "./components/studio-properties-panel";
 export { StudioPropertyField } from "./components/studio-property-field";
 export { StudioZoomControls } from "./components/studio-zoom-controls";
+export { StudioGalleryDialog } from "./components/studio-gallery-dialog";
 
 export type { ToolType, StudioObject, ObjectProperties } from "./types";

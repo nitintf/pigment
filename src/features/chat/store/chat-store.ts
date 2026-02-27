@@ -2,6 +2,9 @@ import { create } from "zustand";
 
 import type { AgentRun, AiModel, ChatMessage, ChatState, TabChatSession } from "../types";
 
+import * as chatApi from "@/lib/api/chat";
+import { getPreference, setPreference } from "@/lib/api/preferences";
+
 let messageCounter = 0;
 
 function generateMessageId(): string {
@@ -25,13 +28,53 @@ export const useChatStore = create<ChatState>((set, get) => ({
   actions: {
     toggleChat: () => set((s) => ({ isOpen: !s.isOpen })),
 
-    setModel: (model: AiModel) => set({ selectedModel: model }),
+    setModel: (model: AiModel) => {
+      set({ selectedModel: model });
+      void setPreference("selectedModel", model);
+    },
 
-    setParallelAgents: (count) => set({ parallelAgents: Math.max(1, Math.min(5, count)) }),
+    setParallelAgents: (count) => {
+      const clamped = Math.max(1, Math.min(5, count));
+      set({ parallelAgents: clamped });
+      void setPreference("parallelAgents", clamped);
+    },
 
     setInputValue: (value) => set({ inputValue: value }),
 
-    sendMessage: (content: string, tabId: string) => {
+    initializePreferences: async () => {
+      const model = await getPreference<AiModel>("selectedModel", "claude-sonnet");
+      const agents = await getPreference<number>("parallelAgents", 1);
+      set({ selectedModel: model, parallelAgents: agents });
+    },
+
+    loadSessionForTab: async (tabId: string) => {
+      const sessions = await chatApi.listChatSessions(tabId);
+      if (sessions.length === 0) return;
+
+      // Load messages from the most recent session
+      const latestSession = sessions[sessions.length - 1];
+      const messageRows = await chatApi.getChatMessages(latestSession.id);
+
+      const messages: ChatMessage[] = messageRows.map((row) => ({
+        id: row.id,
+        role: row.role as ChatMessage["role"],
+        content: row.content,
+        timestamp: new Date(row.createdAt).getTime(),
+      }));
+
+      set((s) => ({
+        tabSessions: {
+          ...s.tabSessions,
+          [tabId]: {
+            messages,
+            agents: [],
+            sessionId: latestSession.id,
+          },
+        },
+      }));
+    },
+
+    sendMessage: async (content: string, tabId: string) => {
       if (!content.trim()) return;
 
       const userMessage: ChatMessage = {
@@ -42,8 +85,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
       };
 
       const { parallelAgents, selectedModel } = get();
+      const session = getSession(get(), tabId);
 
-      // Create agent runs based on parallel agent count
+      // Ensure a chat session exists in SQLite
+      let sessionId = (session as TabChatSession & { sessionId?: string }).sessionId;
+      if (!sessionId) {
+        const dbSession = await chatApi.createChatSession(tabId, selectedModel, "Chat");
+        sessionId = dbSession.id;
+      }
+
+      // Persist user message
+      void chatApi.saveChatMessage(sessionId, "user", content.trim());
+
       const newAgents: AgentRun[] = Array.from({ length: parallelAgents }, (_, i) => ({
         id: `agent-${String(i + 1)}-${String(Date.now())}`,
         label: parallelAgents > 1 ? `Agent ${String(i + 1)}` : "Agent",
@@ -51,32 +104,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
         message: `Using ${selectedModel}...`,
       }));
 
-      set((s) => {
-        const session = getSession(s, tabId);
-        return {
-          tabSessions: {
-            ...s.tabSessions,
-            [tabId]: {
-              messages: [...session.messages, userMessage],
-              agents: newAgents,
-            },
+      set((s) => ({
+        tabSessions: {
+          ...s.tabSessions,
+          [tabId]: {
+            messages: [...session.messages, userMessage],
+            agents: newAgents,
+            sessionId,
           },
-          inputValue: "",
-        };
-      });
+        },
+        inputValue: "",
+      }));
 
       // Simulate agent activity (placeholder — will be replaced with real API)
       for (const agent of newAgents) {
         setTimeout(
           () => {
             set((s) => {
-              const session = getSession(s, tabId);
+              const sess = getSession(s, tabId);
               return {
                 tabSessions: {
                   ...s.tabSessions,
                   [tabId]: {
-                    ...session,
-                    agents: session.agents.map((a) =>
+                    ...sess,
+                    agents: sess.agents.map((a) =>
                       a.id === agent.id
                         ? { ...a, status: "working", message: "Analyzing design..." }
                         : a,
@@ -98,14 +149,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
               timestamp: Date.now(),
             };
 
+            // Persist assistant message
+            const sess = getSession(get(), tabId);
+            const sid = (sess as TabChatSession & { sessionId?: string }).sessionId;
+            if (sid) {
+              void chatApi.saveChatMessage(sid, "assistant", assistantMessage.content);
+            }
+
             set((s) => {
-              const session = getSession(s, tabId);
+              const currentSess = getSession(s, tabId);
               return {
                 tabSessions: {
                   ...s.tabSessions,
                   [tabId]: {
-                    messages: [...session.messages, assistantMessage],
-                    agents: session.agents.map((a) =>
+                    ...currentSess,
+                    messages: [...currentSess.messages, assistantMessage],
+                    agents: currentSess.agents.map((a) =>
                       a.id === agent.id ? { ...a, status: "done", message: "Complete" } : a,
                     ),
                   },
@@ -118,17 +177,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     },
 
-    clearMessages: (tabId: string) =>
+    clearMessages: async (tabId: string) => {
+      const session = getSession(get(), tabId);
+      const sessionId = (session as TabChatSession & { sessionId?: string }).sessionId;
+      if (sessionId) {
+        await chatApi.clearChatMessages(sessionId);
+      }
       set((s) => ({
         tabSessions: {
           ...s.tabSessions,
           [tabId]: EMPTY_SESSION,
         },
-      })),
+      }));
+    },
   },
 }));
 
-/** Hook to get the current tab's chat session */
 export function useTabChatSession(tabId: string): TabChatSession {
   return useChatStore((s) => s.tabSessions[tabId] ?? EMPTY_SESSION);
 }

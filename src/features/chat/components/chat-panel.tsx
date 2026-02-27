@@ -110,7 +110,7 @@ export function ChatPanel() {
 
   const handleSend = useCallback(() => {
     if (!inputValue.trim()) return;
-    sendMessage(inputValue, activeTabId, attachments);
+    void sendMessage(inputValue, activeTabId, attachments);
     setAttachments([]);
   }, [inputValue, activeTabId, attachments, sendMessage]);
 
@@ -208,7 +208,7 @@ export function ChatPanel() {
                 <button
                   className="flex size-5 items-center justify-center rounded text-[#666] transition-colors hover:bg-[#252525] hover:text-[#999]"
                   title="New Chat"
-                  onClick={() => clearMessages(activeTabId)}
+                  onClick={() => void clearMessages(activeTabId)}
                 >
                   <MessageSquarePlus className="size-3" />
                 </button>

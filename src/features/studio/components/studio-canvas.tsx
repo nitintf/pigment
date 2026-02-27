@@ -9,12 +9,13 @@ import {
   Rect,
 } from "fabric";
 import { AligningGuidelines } from "fabric/extensions";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { setFabricCanvasRef, useStudioStore } from "../store/studio-store";
+import { getFabricCanvas, setFabricCanvasRef, useStudioStore } from "../store/studio-store";
 import { useTabStore } from "../store/tab-store";
 import { findParentFrame, moveFrameChildren, setParentId } from "../utils/frame-helpers";
 
+import * as canvasApi from "@/lib/api/canvas";
 import { cn } from "@/lib/utils";
 
 let objectCounter = 0;
@@ -22,6 +23,43 @@ let objectCounter = 0;
 function generateId(): string {
   objectCounter += 1;
   return `obj-${String(objectCounter)}-${String(Date.now())}`;
+}
+
+/** Parse a CSS hex colour and return perceived luminance (0 = dark, 1 = bright). */
+function hexLuminance(hex: string): number {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.substring(0, 2), 16) / 255;
+  const g = parseInt(h.substring(2, 4), 16) / 255;
+  const b = parseInt(h.substring(4, 6), 16) / 255;
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+
+/**
+ * Determine the best text colour for a given point on the canvas.
+ * Checks every object at that point (excluding IText instances) for
+ * a fill colour, picks the topmost one, and returns black if it is
+ * light, white otherwise.
+ */
+function pickTextColorAtPoint(canvas: Canvas, x: number, y: number): string {
+  const objects = canvas.getObjects();
+  // Walk from top of stack → bottom; first opaque hit wins
+  for (let i = objects.length - 1; i >= 0; i--) {
+    const obj = objects[i];
+    if (obj instanceof IText) continue;
+    const bounds = obj.getBoundingRect();
+    const inside =
+      x >= bounds.left &&
+      x <= bounds.left + bounds.width &&
+      y >= bounds.top &&
+      y <= bounds.top + bounds.height;
+    if (!inside) continue;
+    const fill = obj.fill;
+    if (typeof fill === "string" && fill.startsWith("#") && fill.length >= 7) {
+      return hexLuminance(fill) > 0.5 ? "#000000" : "#ffffff";
+    }
+  }
+  // No object under the point → drawing on the dark canvas
+  return "#ffffff";
 }
 
 function getNextFrameName(canvas: Canvas): string {
@@ -102,9 +140,17 @@ function applyFigmaControlDefaults(): void {
 
 applyFigmaControlDefaults();
 
+interface CanvasContextMenu {
+  x: number;
+  y: number;
+  targetId: string;
+}
+
 export function StudioCanvas({ className }: { className?: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [contextMenu, setContextMenu] = useState<CanvasContextMenu | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
   const fabricRef = useRef<Canvas | null>(null);
   const isDrawingRef = useRef(false);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -117,6 +163,7 @@ export function StudioCanvas({ className }: { className?: string }) {
   const historyRef = useRef<string[]>([]);
   const historyIndexRef = useRef(-1);
   const isUndoRedoRef = useRef(false);
+  const isTextEditingRef = useRef(false);
   const clipboardRef = useRef<FabricObjectType | null>(null);
 
   const handleResize = useCallback(() => {
@@ -170,27 +217,29 @@ export function StudioCanvas({ className }: { className?: string }) {
     actions.setSelectedIds([]);
     actions.setZoom(1);
 
-    // Restore saved canvas state for this tab (if any)
-    const tab = useTabStore.getState().tabs.find((t) => t.id === tabId);
-    if (tab?.canvasState) {
-      const { canvasJson, zoom, viewportTransform } = tab.canvasState;
-      isRestoringRef.current = true;
-      void canvas.loadFromJSON(canvasJson).then(() => {
-        // Guard: don't apply if canvas was disposed during async load
-        if (!fabricRef.current) return;
+    // Restore saved canvas state from SQLite
+    isRestoringRef.current = true;
+    void canvasApi.getCanvasState(tabId).then((saved) => {
+      if (!fabricRef.current) return;
+
+      if (saved && saved.canvasJson !== "{}") {
+        const viewportTransform = JSON.parse(saved.viewportTransform) as number[];
+        void canvas.loadFromJSON(saved.canvasJson).then(() => {
+          if (!fabricRef.current) return;
+          isRestoringRef.current = false;
+          canvas.setViewportTransform(
+            viewportTransform as [number, number, number, number, number, number],
+          );
+          canvas.setZoom(saved.zoom);
+          canvas.requestRenderAll();
+          actions.syncObjectsFromCanvas();
+          actions.setZoom(Math.round(saved.zoom * 100) / 100);
+        });
+      } else {
         isRestoringRef.current = false;
-        canvas.setViewportTransform(
-          viewportTransform as [number, number, number, number, number, number],
-        );
-        canvas.setZoom(zoom);
-        canvas.requestRenderAll();
         actions.syncObjectsFromCanvas();
-        actions.setZoom(Math.round(zoom * 100) / 100);
-      });
-    } else {
-      // No saved state — sync empty objects to clear stale layers from previous tab
-      actions.syncObjectsFromCanvas();
-    }
+      }
+    });
 
     canvas.on("object:added", () => actions.syncObjectsFromCanvas());
     canvas.on("object:removed", () => actions.syncObjectsFromCanvas());
@@ -337,6 +386,21 @@ export function StudioCanvas({ className }: { className?: string }) {
     });
 
     canvas.on("mouse:down", (e) => {
+      // Right-click context menu
+      const mouseEvent = e.e as MouseEvent;
+      if (mouseEvent.button === 2 && e.target) {
+        const targetId = (e.target as unknown as { id?: string }).id;
+        if (targetId) {
+          canvas.setActiveObject(e.target);
+          actions.setSelectedIds([targetId]);
+          setContextMenu({ x: mouseEvent.clientX, y: mouseEvent.clientY, targetId });
+          return;
+        }
+      }
+
+      // Dismiss context menu on any left-click
+      setContextMenu(null);
+
       const tool = useStudioStore.getState().activeTool;
 
       if (tool === "hand" || spaceHeldRef.current) {
@@ -366,15 +430,17 @@ export function StudioCanvas({ className }: { className?: string }) {
 
       if (tool === "text") {
         const id = generateId();
+        const textColor = pickTextColorAtPoint(canvas, pointer.x, pointer.y);
         const text = new IText("Type something", {
           left: pointer.x,
           top: pointer.y,
           fontSize: 16,
           fontFamily: "Inter, system-ui, sans-serif",
-          fill: "#ffffff",
+          fill: textColor,
           originX: "left",
           originY: "top",
-          padding: 4,
+          padding: 8,
+          cursorWidth: 1,
         });
         (text as unknown as { id: string }).id = id;
         (text as unknown as { name: string }).name = `Text ${String(objectCounter)}`;
@@ -518,7 +584,7 @@ export function StudioCanvas({ className }: { className?: string }) {
 
     // History: save canvas state for undo/redo
     function saveHistory() {
-      if (isUndoRedoRef.current) return;
+      if (isUndoRedoRef.current || isTextEditingRef.current) return;
       const json = JSON.stringify(
         canvas.toObject(["id", "name", "isFrame", "isComponent", "parentId"]),
       );
@@ -532,18 +598,22 @@ export function StudioCanvas({ className }: { className?: string }) {
       historyIndexRef.current = historyRef.current.length - 1;
     }
 
-    // Save initial state
-    if (!tab?.canvasState) {
-      saveHistory();
-    }
+    // Save initial history state (actual canvas load happens async above)
+    saveHistory();
 
-    // Recalculate text bounding box after editing exits or text changes
+    // Skip expensive history saves while the user is actively typing
+    canvas.on("text:editing:entered", () => {
+      isTextEditingRef.current = true;
+    });
     canvas.on("text:editing:exited", (e) => {
+      isTextEditingRef.current = false;
       const textObj = e.target;
       if (textObj) {
         textObj.setCoords();
         canvas.requestRenderAll();
       }
+      // Save one history snapshot now that editing is done
+      saveHistory();
     });
     canvas.on("text:changed", (e) => {
       const textObj = e.target;
@@ -672,23 +742,42 @@ export function StudioCanvas({ className }: { className?: string }) {
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
 
+    // Debounced auto-save: persist canvas to SQLite after modifications
+    let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+    function scheduleAutoSave() {
+      if (isRestoringRef.current || isUndoRedoRef.current) return;
+      if (autoSaveTimer) clearTimeout(autoSaveTimer);
+      autoSaveTimer = setTimeout(() => {
+        if (!fabricRef.current) return;
+        const json = JSON.stringify(
+          canvas.toObject(["id", "name", "isFrame", "isComponent", "parentId"]),
+        );
+        const z = canvas.getZoom();
+        const vt = JSON.stringify([...canvas.viewportTransform]);
+        void canvasApi.saveCanvasState(tabId, json, z, vt);
+      }, 2000);
+    }
+
+    canvas.on("object:modified", () => scheduleAutoSave());
+    canvas.on("object:added", () => scheduleAutoSave());
+    canvas.on("object:removed", () => scheduleAutoSave());
+
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       resizeObserver.disconnect();
       aligningGuidelines.dispose();
 
-      // Only save canvas state if we're NOT mid-restore (StrictMode race condition).
-      // When loadFromJSON is still pending, the canvas is empty — saving would
-      // overwrite the real saved state with empty data.
+      if (autoSaveTimer) clearTimeout(autoSaveTimer);
+
+      // Save canvas state on unmount (tab switch or close) unless mid-restore
       if (!isRestoringRef.current) {
-        const { saveTabCanvasState } = useTabStore.getState().actions;
-        const canvasJson = JSON.stringify(
+        const json = JSON.stringify(
           canvas.toObject(["id", "name", "isFrame", "isComponent", "parentId"]),
         );
-        const zoom = canvas.getZoom();
-        const viewportTransform = [...canvas.viewportTransform];
-        saveTabCanvasState(tabId, { canvasJson, zoom, viewportTransform });
+        const z = canvas.getZoom();
+        const vt = JSON.stringify([...canvas.viewportTransform]);
+        void canvasApi.saveCanvasState(tabId, json, z, vt);
       }
 
       fabricRef.current = null;
@@ -697,9 +786,117 @@ export function StudioCanvas({ className }: { className?: string }) {
     };
   }, [handleResize]);
 
+  // Close context menu on click-outside or Escape
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handleClick = (e: MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu(null);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setContextMenu(null);
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [contextMenu]);
+
+  function handleContextAction(action: string) {
+    const canvas = getFabricCanvas();
+    if (!canvas || !contextMenu) return;
+    const actions = useStudioStore.getState().actions;
+
+    const target = canvas
+      .getObjects()
+      .find((o) => (o as unknown as { id?: string }).id === contextMenu.targetId);
+
+    switch (action) {
+      case "duplicate": {
+        if (!target) break;
+        void target
+          .clone(["id", "name", "isFrame", "isComponent", "parentId"])
+          .then((cloned: FabricObjectType) => {
+            cloned.set({ left: (cloned.left ?? 0) + 20, top: (cloned.top ?? 0) + 20 });
+            (cloned as unknown as { id: string }).id = generateId();
+            canvas.add(cloned);
+            canvas.setActiveObject(cloned);
+            canvas.requestRenderAll();
+            actions.syncObjectsFromCanvas();
+          });
+        break;
+      }
+      case "delete": {
+        if (!target) break;
+        canvas.setActiveObject(target);
+        actions.setSelectedIds([contextMenu.targetId]);
+        actions.deleteSelected();
+        break;
+      }
+      case "bring-front": {
+        if (!target) break;
+        canvas.bringObjectToFront(target);
+        canvas.requestRenderAll();
+        actions.syncObjectsFromCanvas();
+        break;
+      }
+      case "send-back": {
+        if (!target) break;
+        canvas.sendObjectToBack(target);
+        canvas.requestRenderAll();
+        actions.syncObjectsFromCanvas();
+        break;
+      }
+    }
+
+    setContextMenu(null);
+  }
+
   return (
-    <div ref={containerRef} className={cn("absolute inset-0", className)}>
+    <div
+      ref={containerRef}
+      className={cn("absolute inset-0", className)}
+      onContextMenu={(e) => e.preventDefault()}
+    >
       <canvas ref={canvasRef} />
+
+      {/* Canvas object context menu */}
+      {contextMenu && (
+        <div
+          ref={contextMenuRef}
+          className="fixed z-50 min-w-[160px] rounded-lg border border-[#333] bg-[#252525] py-1 shadow-lg shadow-black/40"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            className="flex w-full items-center px-3 py-1.5 text-left text-[12px] text-[#ccc] transition-colors hover:bg-[#333] hover:text-white"
+            onClick={() => handleContextAction("duplicate")}
+          >
+            Duplicate
+          </button>
+          <button
+            className="flex w-full items-center px-3 py-1.5 text-left text-[12px] text-[#ccc] transition-colors hover:bg-[#333] hover:text-white"
+            onClick={() => handleContextAction("bring-front")}
+          >
+            Bring to Front
+          </button>
+          <button
+            className="flex w-full items-center px-3 py-1.5 text-left text-[12px] text-[#ccc] transition-colors hover:bg-[#333] hover:text-white"
+            onClick={() => handleContextAction("send-back")}
+          >
+            Send to Back
+          </button>
+          <div className="my-1 h-px bg-[#333]" />
+          <button
+            className="flex w-full items-center px-3 py-1.5 text-left text-[12px] text-red-400 transition-colors hover:bg-[#333] hover:text-red-300"
+            onClick={() => handleContextAction("delete")}
+          >
+            Delete
+          </button>
+        </div>
+      )}
     </div>
   );
 }

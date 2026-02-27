@@ -35,7 +35,16 @@ const OVERLAY_ICONS: Record<string, ReactNode> = {
 
 export function StudioLayersPanel() {
   const leftSidebarOpen = useStudioStore((s) => s.leftSidebarOpen);
-  const { layers, totalCount, toggleVisibility, selectObject, reparentObject } = useLayers();
+  const {
+    layers,
+    totalCount,
+    toggleVisibility,
+    selectObject,
+    deleteObject,
+    duplicateObject,
+    renameObject,
+    reparentObject,
+  } = useLayers();
 
   const [collapsedFrames, setCollapsedFrames] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -229,7 +238,7 @@ export function StudioLayersPanel() {
                           }
                           hasChildren={hasChildren}
                           id={node.id}
-                          isComponent={node.isComponent}
+                          isComponent={!!node.isComponent}
                           isDropTarget={overId === node.id && dropPosition === "inside"}
                           isExpanded={!isCollapsed}
                           isFrame={node.isFrame}
@@ -237,6 +246,9 @@ export function StudioLayersPanel() {
                           selected={node.selected}
                           type={node.type}
                           visible={node.visible}
+                          onDelete={deleteObject}
+                          onDuplicate={duplicateObject}
+                          onRename={renameObject}
                           onSelect={selectObject}
                           onToggleExpand={toggleExpand}
                           onToggleVisibility={toggleVisibility}

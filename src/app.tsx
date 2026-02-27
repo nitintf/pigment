@@ -6,6 +6,7 @@ import {
   Studio,
   StudioCanvas,
   StudioDeleteButton,
+  StudioGalleryDialog,
   StudioLayersPanel,
   StudioPropertiesPanel,
   StudioShapeMenu,
@@ -18,12 +19,15 @@ import { StudioCommandMenu } from "@/features/studio/components/studio-command-m
 import { StudioSettingsDialog } from "@/features/studio/components/studio-settings-dialog";
 import { useStudioStore } from "@/features/studio/store/studio-store";
 import { useTabStore } from "@/features/studio/store/tab-store";
+import { useAppInit } from "@/hooks/use-app-init";
 import { useHotkeys } from "@/hooks/use-hotkeys";
 
 function App() {
+  const ready = useAppInit();
   const activeTabId = useTabStore((s) => s.activeTabId);
   const [commandOpen, setCommandOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [galleryOpen, setGalleryOpen] = useState(false);
 
   const toggleLeftSidebar = useStudioStore((s) => s.actions.toggleLeftSidebar);
   const toggleRightPanel = useStudioStore((s) => s.actions.toggleRightPanel);
@@ -36,15 +40,27 @@ function App() {
       { key: ".", meta: true, handler: toggleRightPanel },
       { key: "j", meta: true, handler: toggleChat },
       { key: ",", meta: true, handler: () => setSettingsOpen(true) },
+      { key: "g", meta: true, handler: () => setGalleryOpen(true) },
     ],
     [toggleLeftSidebar, toggleRightPanel, toggleChat],
   );
 
   useHotkeys(hotkeys);
 
+  if (!ready) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-[#1a1a1a]">
+        <div className="text-sm text-[#666]">Loading...</div>
+      </div>
+    );
+  }
+
   return (
     <Studio>
-      <StudioTopBar onOpenSettings={() => setSettingsOpen(true)} />
+      <StudioTopBar
+        onOpenGallery={() => setGalleryOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
 
       <div className="relative flex-1 overflow-hidden">
         <StudioCanvas key={activeTabId} />
@@ -73,6 +89,7 @@ function App() {
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <StudioSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <StudioGalleryDialog open={galleryOpen} onOpenChange={setGalleryOpen} />
     </Studio>
   );
 }
